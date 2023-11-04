@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{cell::RefCell, fmt, rc::Rc};
 
 use environment::Environment;
 use rustyline::{error::ReadlineError, DefaultEditor};
@@ -297,10 +297,14 @@ pub enum Stmt {
         name: Token,
         initializer: Option<Expr>,
     },
+    While {
+        condition: Expr,
+        body: Box<Stmt>,
+    },
 }
 
 impl Stmt {
-    fn evaluate(&self, env: &mut Environment) -> Result<(), String> {
+    fn evaluate(&self, env: &Rc<RefCell<Environment>>) -> Result<(), String> {
         match self {
             Stmt::Expression(expr) => {
                 expr.evaluate(env)?;
@@ -320,9 +324,9 @@ impl Stmt {
                 println!("{}", expr.evaluate(env)?);
             }
             Stmt::Block(statements) => {
-                let mut environment = Environment::new_enclosed(env.clone());
+                let environment = Environment::new_enclosed(env);
                 for statement in statements {
-                    statement.evaluate(&mut environment)?;
+                    statement.evaluate(&environment)?;
                 }
             }
             Stmt::Var { name, initializer } => {
@@ -330,7 +334,12 @@ impl Stmt {
                     Some(initializer) => initializer.evaluate(env)?,
                     None => Literal::Nil,
                 };
-                env.define(name.lexeme.clone(), value);
+                env.borrow_mut().define(name.lexeme.clone(), value);
+            }
+            Stmt::While { condition, body } => {
+                while condition.evaluate(env)?.to_boolean() {
+                    body.evaluate(env)?;
+                }
             }
         }
 
@@ -364,11 +373,11 @@ pub enum Expr {
 }
 
 impl Expr {
-    fn evaluate(&self, env: &mut Environment) -> Result<Literal, String> {
+    fn evaluate(&self, env: &Rc<RefCell<Environment>>) -> Result<Literal, String> {
         match self {
             Expr::Assign { name, value } => {
                 let value = value.evaluate(env)?;
-                env.assign(name, value.clone())?;
+                env.borrow_mut().assign(name, value.clone())?;
                 Ok(value)
             }
             Expr::Binary {
@@ -376,7 +385,6 @@ impl Expr {
                 operator,
                 right,
             } => {
-                // TODO: error handling
                 let left = left.evaluate(env)?;
                 let right = right.evaluate(env)?;
                 match operator.token_type {
@@ -429,7 +437,7 @@ impl Expr {
                     _ => panic!("Unexpected operator {:?}", operator),
                 }
             }
-            Expr::Variable(name) => Ok(env.get(name)?.clone()),
+            Expr::Variable(name) => Ok(env.borrow().get(name)?.clone()),
         }
     }
 }
@@ -501,9 +509,30 @@ impl fmt::Display for Literal {
     }
 }
 
-fn main() {
+fn run_file(filename: &str) {
+    let contents =
+        std::fs::read_to_string(filename).expect("Something went wrong reading the file");
+    let mut scanner = Scanner::new(contents);
+    let tokens = scanner.scan_tokens();
+    let mut parser = parser::Parser::new(tokens);
+    let environment = environment::Environment::new();
+
+    match parser.parse() {
+        Ok(statements) => {
+            for statement in statements {
+                match statement.evaluate(&environment) {
+                    Ok(_) => {}
+                    Err(error) => println!("{}", error),
+                }
+            }
+        }
+        Err(error) => println!("{}", error),
+    }
+}
+
+fn repl() {
     let mut rl = DefaultEditor::new().unwrap();
-    let mut environment = environment::Environment::new();
+    let environment = environment::Environment::new();
 
     if rl.load_history(".history").is_err() {
         println!("No previous history.");
@@ -519,7 +548,7 @@ fn main() {
                 match parser.parse() {
                     Ok(statements) => {
                         for statement in statements {
-                            match statement.evaluate(&mut environment) {
+                            match statement.evaluate(&environment) {
                                 Ok(_) => {}
                                 Err(error) => println!("{}", error),
                             }
@@ -530,15 +559,24 @@ fn main() {
             }
             Err(ReadlineError::Interrupted) => {
                 // User pressed Ctrl+C
-                println!("CTRL+C");
+                // println!("CTRL+C");
             }
             Err(ReadlineError::Eof) => {
                 // User pressed Ctrl+D
-                println!("CTRL+D");
                 break;
             }
             Err(error) => println!("error: {}", error),
         }
         rl.save_history(".history").unwrap();
+    }
+}
+
+fn main() {
+    let args = std::env::args().collect::<Vec<String>>();
+
+    match args.len() {
+        3.. => println!("Usage: rubrs [script]"),
+        2 => run_file(&args[1]),
+        _ => repl(),
     }
 }
