@@ -1,4 +1,7 @@
-use std::fmt;
+use std::{
+    fmt,
+    io::{self, Write},
+};
 
 mod parser;
 
@@ -293,6 +296,46 @@ pub enum Expr {
     },
 }
 
+impl Expr {
+    fn evaluate(&self) -> Literal {
+        match self {
+            Expr::Binary {
+                left,
+                operator,
+                right,
+            } => {
+                // TODO: error handling
+                let left = left.evaluate();
+                let right = right.evaluate();
+                match operator.token_type {
+                    TokenType::Minus => Literal::Number(left.to_number() - right.to_number()),
+                    TokenType::Plus => Literal::Number(left.to_number() + right.to_number()),
+                    TokenType::Slash => Literal::Number(left.to_number() / right.to_number()),
+                    TokenType::Star => Literal::Number(left.to_number() * right.to_number()),
+                    TokenType::Greater => Literal::Boolean(left.to_number() > right.to_number()),
+                    TokenType::GreaterEqual => {
+                        Literal::Boolean(left.to_number() >= right.to_number())
+                    }
+                    TokenType::Less => Literal::Boolean(left.to_number() < right.to_number()),
+                    TokenType::LessEqual => Literal::Boolean(left.to_number() <= right.to_number()),
+                    TokenType::BangEqual => Literal::Boolean(left != right),
+                    _ => panic!("Unexpected operator {:?}", operator),
+                }
+            }
+            Expr::Grouping(expr) => expr.evaluate(),
+            Expr::Literal(literal) => literal.clone(),
+            Expr::Unary { operator, right } => {
+                let right = right.evaluate();
+                match operator.token_type {
+                    TokenType::Minus => Literal::Number(-right.to_number()),
+                    TokenType::Bang => Literal::Boolean(!right.to_boolean()),
+                    _ => panic!("Unexpected operator {:?}", operator),
+                }
+            }
+        }
+    }
+}
+
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -308,12 +351,38 @@ impl fmt::Display for Expr {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Literal {
     Boolean(bool),
     Nil,
     Number(f64),
     String(String),
+}
+
+impl Literal {
+    fn to_boolean(&self) -> bool {
+        match self {
+            Literal::Boolean(boolean) => *boolean,
+            Literal::Nil => false,
+            Literal::Number(number) => *number != 0.0,
+            Literal::String(string) => !string.is_empty(),
+        }
+    }
+
+    fn to_number(&self) -> f64 {
+        match self {
+            Literal::Boolean(boolean) => {
+                if *boolean {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Literal::Nil => 0.0,
+            Literal::Number(number) => *number,
+            Literal::String(string) => string.parse().unwrap(),
+        }
+    }
 }
 
 impl fmt::Display for Literal {
@@ -328,11 +397,35 @@ impl fmt::Display for Literal {
 }
 
 fn main() {
-    let source = String::from("-123 * (45.67 + 89)");
-    let mut scanner = Scanner::new(source);
-    let tokens = scanner.scan_tokens();
-    let mut parser = parser::Parser::new(tokens);
-    let expression = parser.parse().unwrap();
+    // let source = String::from(r#""a" + "b""#);
+    // let mut scanner = Scanner::new(source);
+    // let tokens = scanner.scan_tokens();
+    // let mut parser = parser::Parser::new(tokens);
+    // let expression = parser.parse().unwrap();
 
-    println!("{:#?}", expression);
+    // println!("{:#?}", expression);
+    // println!("{:#?}", expression.evaluate());
+
+    loop {
+        print!("rubrs> ");
+        io::stdout().flush().unwrap();
+
+        let mut input = String::new();
+        match io::stdin().read_line(&mut input) {
+            Ok(n) => {
+                if n == 0 {
+                    break;
+                }
+
+                let mut scanner = Scanner::new(input);
+                let tokens = scanner.scan_tokens();
+                let mut parser = parser::Parser::new(tokens);
+                let expression = parser.parse().unwrap();
+
+                // println!("{:#?}", expression);
+                println!("{:#?}", expression.evaluate());
+            }
+            Err(error) => println!("error: {}", error),
+        }
+    }
 }
