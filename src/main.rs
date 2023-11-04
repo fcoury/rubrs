@@ -285,6 +285,7 @@ impl Token {
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
+    Block(Vec<Stmt>),
     Expression(Expr),
     Print(Expr),
     Var {
@@ -301,6 +302,12 @@ impl Stmt {
             }
             Stmt::Print(expr) => {
                 println!("{}", expr.evaluate(env)?);
+            }
+            Stmt::Block(statements) => {
+                let mut environment = Environment::new_enclosed(env.clone());
+                for statement in statements {
+                    statement.evaluate(&mut environment)?;
+                }
             }
             Stmt::Var { name, initializer } => {
                 let value = match initializer {
