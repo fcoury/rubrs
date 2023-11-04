@@ -287,6 +287,11 @@ impl Token {
 pub enum Stmt {
     Block(Vec<Stmt>),
     Expression(Expr),
+    If {
+        condition: Expr,
+        then_branch: Box<Stmt>,
+        else_branch: Option<Box<Stmt>>,
+    },
     Print(Expr),
     Var {
         name: Token,
@@ -299,6 +304,17 @@ impl Stmt {
         match self {
             Stmt::Expression(expr) => {
                 expr.evaluate(env)?;
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                if condition.evaluate(env)?.to_boolean() {
+                    then_branch.evaluate(env)?;
+                } else if let Some(else_branch) = else_branch {
+                    else_branch.evaluate(env)?;
+                }
             }
             Stmt::Print(expr) => {
                 println!("{}", expr.evaluate(env)?);
@@ -335,6 +351,11 @@ pub enum Expr {
     },
     Grouping(Box<Expr>),
     Literal(Literal),
+    Logical {
+        left: Box<Expr>,
+        operator: Token,
+        right: Box<Expr>,
+    },
     Unary {
         operator: Token,
         right: Box<Expr>,
@@ -379,6 +400,27 @@ impl Expr {
             }
             Expr::Grouping(expr) => expr.evaluate(env),
             Expr::Literal(literal) => Ok(literal.clone()),
+            Expr::Logical {
+                left,
+                operator,
+                right,
+            } => {
+                let left = left.evaluate(env)?;
+                match operator.token_type {
+                    TokenType::And => {
+                        if !left.to_boolean() {
+                            return Ok(left);
+                        }
+                    }
+                    TokenType::Or => {
+                        if left.to_boolean() {
+                            return Ok(left);
+                        }
+                    }
+                    _ => panic!("Unexpected operator {:?}", operator),
+                }
+                right.evaluate(env)
+            }
             Expr::Unary { operator, right } => {
                 let right = right.evaluate(env)?;
                 match operator.token_type {
@@ -402,6 +444,11 @@ impl fmt::Display for Expr {
                 right,
             } => write!(f, "({} {} {})", operator.lexeme, left, right),
             Expr::Grouping(expr) => write!(f, "(group {})", expr),
+            Expr::Logical {
+                left,
+                operator,
+                right,
+            } => write!(f, "({} {} {})", operator.lexeme, left, right),
             Expr::Literal(literal) => write!(f, "{}", literal),
             Expr::Unary { operator, right } => write!(f, "({} {})", operator.lexeme, right),
             Expr::Variable(name) => write!(f, "{}", name.lexeme),
