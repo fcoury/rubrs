@@ -1,11 +1,11 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use crate::{Literal, Token};
+use crate::types::{Token, Value};
 
 #[derive(Debug, Clone)]
 pub struct Environment {
     enclosing: Option<Rc<RefCell<Environment>>>,
-    values: HashMap<String, Literal>,
+    values: HashMap<String, Value>,
 }
 
 impl Environment {
@@ -23,11 +23,11 @@ impl Environment {
         }))
     }
 
-    pub fn define(&mut self, name: String, value: Literal) {
+    pub fn define(&mut self, name: String, value: Value) {
         self.values.insert(name, value);
     }
 
-    pub fn get(&self, name: &Token) -> Result<Literal, String> {
+    pub fn get(&self, name: &Token) -> Result<Value, String> {
         if let Some(value) = self.values.get(&name.lexeme) {
             return Ok(value.clone());
         }
@@ -39,7 +39,7 @@ impl Environment {
         Err(format!("Undefined variable '{}'.", name.lexeme))
     }
 
-    pub fn assign(&mut self, name: &Token, value: Literal) -> Result<(), String> {
+    pub fn assign(&mut self, name: &Token, value: Value) -> Result<(), String> {
         if self.values.contains_key(&name.lexeme) {
             self.values.insert(name.lexeme.clone(), value);
             return Ok(());
