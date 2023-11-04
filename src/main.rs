@@ -1,8 +1,9 @@
-use std::{
-    fmt,
-    io::{self, Write},
-};
+use std::fmt;
 
+use environment::Environment;
+use rustyline::{error::ReadlineError, DefaultEditor};
+
+mod environment;
 mod parser;
 
 #[derive(Debug, Clone)]
@@ -268,6 +269,7 @@ enum TokenType {
 pub struct Token {
     token_type: TokenType,
     lexeme: String,
+    #[allow(unused)]
     line: usize,
 }
 
@@ -282,7 +284,43 @@ impl Token {
 }
 
 #[derive(Debug, Clone)]
+pub enum Stmt {
+    Expression(Expr),
+    Print(Expr),
+    Var {
+        name: Token,
+        initializer: Option<Expr>,
+    },
+}
+
+impl Stmt {
+    fn evaluate(&self, env: &mut Environment) -> Result<(), String> {
+        match self {
+            Stmt::Expression(expr) => {
+                expr.evaluate(env)?;
+            }
+            Stmt::Print(expr) => {
+                println!("{}", expr.evaluate(env)?);
+            }
+            Stmt::Var { name, initializer } => {
+                let value = match initializer {
+                    Some(initializer) => initializer.evaluate(env)?,
+                    None => Literal::Nil,
+                };
+                env.define(name.lexeme.clone(), value);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Expr {
+    Assign {
+        name: Token,
+        value: Box<Expr>,
+    },
     Binary {
         left: Box<Expr>,
         operator: Token,
@@ -294,44 +332,55 @@ pub enum Expr {
         operator: Token,
         right: Box<Expr>,
     },
+    Variable(Token),
 }
 
 impl Expr {
-    fn evaluate(&self) -> Literal {
+    fn evaluate(&self, env: &mut Environment) -> Result<Literal, String> {
         match self {
+            Expr::Assign { name, value } => {
+                let value = value.evaluate(env)?;
+                env.assign(name, value.clone())?;
+                Ok(value)
+            }
             Expr::Binary {
                 left,
                 operator,
                 right,
             } => {
                 // TODO: error handling
-                let left = left.evaluate();
-                let right = right.evaluate();
+                let left = left.evaluate(env)?;
+                let right = right.evaluate(env)?;
                 match operator.token_type {
-                    TokenType::Minus => Literal::Number(left.to_number() - right.to_number()),
-                    TokenType::Plus => Literal::Number(left.to_number() + right.to_number()),
-                    TokenType::Slash => Literal::Number(left.to_number() / right.to_number()),
-                    TokenType::Star => Literal::Number(left.to_number() * right.to_number()),
-                    TokenType::Greater => Literal::Boolean(left.to_number() > right.to_number()),
-                    TokenType::GreaterEqual => {
-                        Literal::Boolean(left.to_number() >= right.to_number())
+                    TokenType::Minus => Ok(Literal::Number(left.to_number() - right.to_number())),
+                    TokenType::Plus => Ok(Literal::Number(left.to_number() + right.to_number())),
+                    TokenType::Slash => Ok(Literal::Number(left.to_number() / right.to_number())),
+                    TokenType::Star => Ok(Literal::Number(left.to_number() * right.to_number())),
+                    TokenType::Greater => {
+                        Ok(Literal::Boolean(left.to_number() > right.to_number()))
                     }
-                    TokenType::Less => Literal::Boolean(left.to_number() < right.to_number()),
-                    TokenType::LessEqual => Literal::Boolean(left.to_number() <= right.to_number()),
-                    TokenType::BangEqual => Literal::Boolean(left != right),
+                    TokenType::GreaterEqual => {
+                        Ok(Literal::Boolean(left.to_number() >= right.to_number()))
+                    }
+                    TokenType::Less => Ok(Literal::Boolean(left.to_number() < right.to_number())),
+                    TokenType::LessEqual => {
+                        Ok(Literal::Boolean(left.to_number() <= right.to_number()))
+                    }
+                    TokenType::BangEqual => Ok(Literal::Boolean(left != right)),
                     _ => panic!("Unexpected operator {:?}", operator),
                 }
             }
-            Expr::Grouping(expr) => expr.evaluate(),
-            Expr::Literal(literal) => literal.clone(),
+            Expr::Grouping(expr) => expr.evaluate(env),
+            Expr::Literal(literal) => Ok(literal.clone()),
             Expr::Unary { operator, right } => {
-                let right = right.evaluate();
+                let right = right.evaluate(env)?;
                 match operator.token_type {
-                    TokenType::Minus => Literal::Number(-right.to_number()),
-                    TokenType::Bang => Literal::Boolean(!right.to_boolean()),
+                    TokenType::Minus => Ok(Literal::Number(-right.to_number())),
+                    TokenType::Bang => Ok(Literal::Boolean(!right.to_boolean())),
                     _ => panic!("Unexpected operator {:?}", operator),
                 }
             }
+            Expr::Variable(name) => Ok(env.get(name)?.clone()),
         }
     }
 }
@@ -339,6 +388,7 @@ impl Expr {
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Expr::Assign { name, value } => write!(f, "({} = {})", name.lexeme, value),
             Expr::Binary {
                 left,
                 operator,
@@ -347,6 +397,7 @@ impl fmt::Display for Expr {
             Expr::Grouping(expr) => write!(f, "(group {})", expr),
             Expr::Literal(literal) => write!(f, "{}", literal),
             Expr::Unary { operator, right } => write!(f, "({} {})", operator.lexeme, right),
+            Expr::Variable(name) => write!(f, "{}", name.lexeme),
         }
     }
 }
@@ -397,35 +448,43 @@ impl fmt::Display for Literal {
 }
 
 fn main() {
-    // let source = String::from(r#""a" + "b""#);
-    // let mut scanner = Scanner::new(source);
-    // let tokens = scanner.scan_tokens();
-    // let mut parser = parser::Parser::new(tokens);
-    // let expression = parser.parse().unwrap();
+    let mut rl = DefaultEditor::new().unwrap();
+    let mut environment = environment::Environment::new();
 
-    // println!("{:#?}", expression);
-    // println!("{:#?}", expression.evaluate());
-
+    if rl.load_history(".history").is_err() {
+        println!("No previous history.");
+    }
     loop {
-        print!("rubrs> ");
-        io::stdout().flush().unwrap();
+        match rl.readline("rubrs> ") {
+            Ok(line) => {
+                rl.add_history_entry(line.as_str()).unwrap();
 
-        let mut input = String::new();
-        match io::stdin().read_line(&mut input) {
-            Ok(n) => {
-                if n == 0 {
-                    break;
-                }
-
-                let mut scanner = Scanner::new(input);
+                let mut scanner = Scanner::new(line);
                 let tokens = scanner.scan_tokens();
                 let mut parser = parser::Parser::new(tokens);
-                let expression = parser.parse().unwrap();
-
-                // println!("{:#?}", expression);
-                println!("{:#?}", expression.evaluate());
+                match parser.parse() {
+                    Ok(statements) => {
+                        for statement in statements {
+                            match statement.evaluate(&mut environment) {
+                                Ok(_) => {}
+                                Err(error) => println!("{}", error),
+                            }
+                        }
+                    }
+                    Err(error) => println!("{}", error),
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                // User pressed Ctrl+C
+                println!("CTRL+C");
+            }
+            Err(ReadlineError::Eof) => {
+                // User pressed Ctrl+D
+                println!("CTRL+D");
+                break;
             }
             Err(error) => println!("error: {}", error),
         }
+        rl.save_history(".history").unwrap();
     }
 }

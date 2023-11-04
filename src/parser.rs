@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::{Expr, Literal, Token, TokenType};
+use crate::{Expr, Literal, Stmt, Token, TokenType};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -12,12 +12,88 @@ impl Parser {
         Self { tokens, current: 0 }
     }
 
-    pub fn parse(&mut self) -> Result<Expr, String> {
-        self.expression()
+    pub fn parse(&mut self) -> Result<Vec<Stmt>, String> {
+        let mut statements = Vec::new();
+
+        while !self.is_at_end() {
+            statements.push(self.declaration()?);
+        }
+
+        Ok(statements)
+    }
+
+    fn declaration(&mut self) -> Result<Stmt, String> {
+        if self.match_token(vec![TokenType::Var]) {
+            return self.var_declaration();
+        }
+
+        // TODO: add synchronize
+        self.statement()
+    }
+
+    fn var_declaration(&mut self) -> Result<Stmt, String> {
+        let name = self.consume(
+            TokenType::Identifier(String::new()),
+            "Expect variable name.",
+        )?;
+
+        let initializer = if self.match_token(vec![TokenType::Equal]) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+
+        self.consume(
+            TokenType::Semicolon,
+            "Expect ';' after variable declaration.",
+        )?;
+
+        Ok(Stmt::Var { name, initializer })
+    }
+
+    fn statement(&mut self) -> Result<Stmt, String> {
+        if self.match_token(vec![TokenType::Print]) {
+            return self.print_statement();
+        }
+
+        self.expression_statement()
+    }
+
+    fn print_statement(&mut self) -> Result<Stmt, String> {
+        let value = self.expression()?;
+        self.consume(TokenType::Semicolon, "Expect ';' after value.")?;
+        Ok(Stmt::Print(value))
+    }
+
+    fn expression_statement(&mut self) -> Result<Stmt, String> {
+        let expr = self.expression()?;
+        self.consume(TokenType::Semicolon, "Expect ';' after expression.")?;
+        Ok(Stmt::Expression(expr))
     }
 
     fn expression(&mut self) -> Result<Expr, String> {
-        self.equality()
+        self.assignment()
+    }
+
+    fn assignment(&mut self) -> Result<Expr, String> {
+        let expr = self.equality()?;
+
+        if self.match_token(vec![TokenType::Equal]) {
+            let equals = self.previous();
+            let value = self.assignment()?;
+
+            match expr {
+                Expr::Variable(name) => {
+                    return Ok(Expr::Assign {
+                        name,
+                        value: Box::new(value),
+                    })
+                }
+                _ => return Err(self.error(equals, "Invalid assignment target.")),
+            }
+        }
+
+        Ok(expr)
     }
 
     fn equality(&mut self) -> Result<Expr, String> {
@@ -124,6 +200,10 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Literal(Literal::String(string)))
             }
+            TokenType::Identifier(_) => {
+                self.advance();
+                Ok(Expr::Variable(self.previous()))
+            }
             TokenType::LeftParen => {
                 self.advance();
                 let expr = self.expression()?;
@@ -192,6 +272,7 @@ impl Parser {
         }
     }
 
+    #[allow(unused)]
     fn synchronize(&mut self) {
         self.advance();
 
